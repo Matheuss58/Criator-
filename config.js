@@ -1,0 +1,1 @@
+const API_KEY = 'SUA_CHAVE_AQUI';

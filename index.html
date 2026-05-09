@@ -9,24 +9,36 @@
 <body>
   <div class="container">
     <h1>🧠 Meme AI Generator</h1>
+
+    <!-- Campo seguro para a chave da API (não aparece no código fonte) -->
+    <div id="apiBox" class="api-box">
+      <label for="apiKeyInput">🔑 Chave Gemini:</label>
+      <input type="password" id="apiKeyInput" placeholder="Cole sua chave aqui">
+      <button id="saveKeyBtn">💾 Salvar</button>
+    </div>
+
     <div class="settings">
       <div class="duration-box">
         <span>⏱️ Duração do meme: <span id="durLabel">15</span>s</span>
         <input type="range" id="durSlider" min="5" max="60" value="15" step="1">
       </div>
     </div>
+
     <div class="canvas-container">
       <canvas id="renderCanvas" width="540" height="960"></canvas>
     </div>
+
     <div class="controls">
-      <button id="analyzeBtn">🔍 Analisar vídeo com IA</button>
+      <button id="analyzeBtn" disabled>🔍 Analisar vídeo com IA</button>
       <button id="generateBtn" disabled>🎬 Gerar meme</button>
       <button id="downloadBtn" disabled>⬇️ Baixar</button>
     </div>
-    <div id="status">Carregando vídeo...</div>
+
+    <div id="status">⏳ Aguardando chave da API...</div>
   </div>
 
   <video id="sourceVideo" style="display:none;" playsinline muted></video>
+  <script src="config.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
