@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meme AI Generator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>🧠 Meme AI Generator</h1>
+    <div class="settings">
+      <div class="duration-box">
+        <span>⏱️ Duração do meme: <span id="durLabel">15</span>s</span>
+        <input type="range" id="durSlider" min="5" max="60" value="15" step="1">
+      </div>
+    </div>
+    <div class="canvas-container">
+      <canvas id="renderCanvas" width="540" height="960"></canvas>
+    </div>
+    <div class="controls">
+      <button id="analyzeBtn">🔍 Analisar vídeo com IA</button>
+      <button id="generateBtn" disabled>🎬 Gerar meme</button>
+      <button id="downloadBtn" disabled>⬇️ Baixar</button>
+    </div>
+    <div id="status">Carregando vídeo...</div>
+  </div>
+
+  <video id="sourceVideo" style="display:none;" playsinline muted></video>
+  <script src="script.js"></script>
+</body>
+</html>
