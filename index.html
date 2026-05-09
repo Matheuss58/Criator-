@@ -2,43 +2,60 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Meme AI Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>🎙️ Cortes de Podcast com IA (Suporte até 2GB)</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
-    <h1>🧠 Meme AI Generator</h1>
+  <div class="app-container">
+    <header>
+      <h1>🎬 Cortes Virais <span>by Gemini 2.0 + File API</span></h1>
+      <div class="tab-bar">
+        <button class="tab-btn active" data-tab="tab1">📤 1. Enviar vídeo</button>
+        <button class="tab-btn" data-tab="tab2" disabled>✂️ 2. Seus 10 clipes</button>
+      </div>
+    </header>
 
-    <!-- Campo seguro para a chave da API (não aparece no código fonte) -->
-    <div id="apiBox" class="api-box">
-      <label for="apiKeyInput">🔑 Chave Gemini:</label>
-      <input type="password" id="apiKeyInput" placeholder="Cole sua chave aqui">
-      <button id="saveKeyBtn">💾 Salvar</button>
-    </div>
+    <div id="tab1" class="tab-content active">
+      <div class="card">
+        <div class="api-section">
+          <label>🔑 Chave da API Gemini</label>
+          <div class="api-input-group">
+            <input type="password" id="geminiApiKey" placeholder="Cole sua chave aqui" autocomplete="off">
+            <button id="saveApiBtn" class="secondary">💾 Salvar</button>
+          </div>
+          <small>🔒 Fica salva apenas nesta sessão (sessionStorage)</small>
+        </div>
 
-    <div class="settings">
-      <div class="duration-box">
-        <span>⏱️ Duração do meme: <span id="durLabel">15</span>s</span>
-        <input type="range" id="durSlider" min="5" max="60" value="15" step="1">
+        <div class="upload-section">
+          <label>📹 Vídeo do podcast (máx 2GB)</label>
+          <div class="file-area" id="fileDropZone">
+            <input type="file" id="videoUpload" accept="video/mp4,video/webm,video/quicktime">
+            <p>🎥 Clique ou arraste um vídeo (até 2GB)</p>
+            <span id="fileName" class="file-name"></span>
+          </div>
+          <div class="video-preview" id="videoPreviewContainer" style="display: none;">
+            <video id="previewVideo" controls width="100%" style="border-radius: 16px;"></video>
+          </div>
+        </div>
+
+        <button id="analyzeBtn" class="primary" disabled>✨ Gerar 10 clipes virais com IA</button>
+        <div id="statusMsg" class="status">⏳ Aguardando chave e vídeo...</div>
       </div>
     </div>
 
-    <div class="canvas-container">
-      <canvas id="renderCanvas" width="540" height="960"></canvas>
+    <div id="tab2" class="tab-content">
+      <div class="clips-header">
+        <h2>📌 Top 10 momentos virais</h2>
+        <p>Edite título e hashtags, depois clique em "Baixar clipe MP4"</p>
+      </div>
+      <div id="clipsList" class="clips-grid"></div>
     </div>
-
-    <div class="controls">
-      <button id="analyzeBtn" disabled>🔍 Analisar vídeo com IA</button>
-      <button id="generateBtn" disabled>🎬 Gerar meme</button>
-      <button id="downloadBtn" disabled>⬇️ Baixar</button>
-    </div>
-
-    <div id="status">⏳ Aguardando chave da API...</div>
   </div>
 
-  <video id="sourceVideo" style="display:none;" playsinline muted></video>
-  <script src="config.js"></script>
+  <video id="sourceVideo" style="display: none;" playsinline crossorigin="anonymous"></video>
+  <canvas id="renderCanvas" width="540" height="960" style="display: none;"></canvas>
+
   <script src="script.js"></script>
 </body>
 </html>

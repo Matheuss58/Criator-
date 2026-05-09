@@ -1,331 +1,711 @@
-// ⚙️ CONFIGURAÇÃO
-const VIDEO_URL = 'buck.mp4';
+// ======================================================
+// 🎬 VIRAL PODCAST CLIPPER - UNIFIED VERSION
+// Combina:
+// ✅ Upload via File API Gemini
+// ✅ Transcript com timestamps por palavra
+// ✅ Legenda dinâmica (palavra ativa)
+// ✅ Crop inteligente (1080x1920, cover)
+// ✅ Fallback por atividade de áudio (RMS)
+// ✅ Títulos e hashtags editáveis
+// ✅ Export MP4 (WebM)
+// ======================================================
 
-// UI elements
-const apiBox = document.getElementById('apiBox');
-const apiKeyInput = document.getElementById('apiKeyInput');
-const saveKeyBtn = document.getElementById('saveKeyBtn');
-const sourceVideo = document.getElementById('sourceVideo');
-const canvas = document.getElementById('renderCanvas');
-const ctx = canvas.getContext('2d');
-const durSlider = document.getElementById('durSlider');
-const durLabel = document.getElementById('durLabel');
+// ------------------------------------------------------
+// DOM elements
+// ------------------------------------------------------
+const geminiKeyInput = document.getElementById('geminiApiKey');
+const saveApiBtn = document.getElementById('saveApiBtn');
+const videoUpload = document.getElementById('videoUpload');
+const fileDropZone = document.getElementById('fileDropZone');
+const fileNameSpan = document.getElementById('fileName');
+const previewContainer = document.getElementById('videoPreviewContainer');
+const previewVideo = document.getElementById('previewVideo');
 const analyzeBtn = document.getElementById('analyzeBtn');
-const generateBtn = document.getElementById('generateBtn');
-const downloadBtn = document.getElementById('downloadBtn');
-const statusDiv = document.getElementById('status');
+const statusDiv = document.getElementById('statusMsg');
+const sourceVideo = document.getElementById('sourceVideo');
+const renderCanvas = document.getElementById('renderCanvas');
+const ctx = renderCanvas.getContext('2d');
 
+// Canvas 1080x1920 (9:16)
+renderCanvas.width = 1080;
+renderCanvas.height = 1920;
+
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
+// ------------------------------------------------------
 // State
-let selectedClip = null; // { startTime, endTime, caption }
-let memeDuration = 15;
-let isGenerating = false;
-let mediaRecorder = null;
-let chunks = [];
+// ------------------------------------------------------
 let currentApiKey = '';
+let uploadedVideoFile = null;
+let uploadedFileUri = null;
+let videoDuration = 0;
+let viralClips = [];        // cada elemento: { start, end, title, descriptionWithHashtags, transcript }
+let isRendering = false;
 
-// ---------- Gerência segura da chave ----------
-function loadApiKey() {
+// ------------------------------------------------------
+// Configurações de renderização
+// ------------------------------------------------------
+const RENDER_CONFIG = {
+  FPS: 30,
+  TITLE_FONT: 'bold 56px "Inter", system-ui, sans-serif',
+  SUBTITLE_FONT: 'bold 48px "Inter", system-ui, sans-serif',
+  BITRATE: 6000000,          // 6 Mbps
+  COLORS: {
+    titleBg: 'rgba(0,0,0,0.65)',
+    titleText: '#ffffff',
+    subtitleNormal: '#ffffff',
+    subtitleActive: '#ffe066',
+    shadow: '#000000'
+  }
+};
+
+// ------------------------------------------------------
+// API Key (sessionStorage)
+// ------------------------------------------------------
+function loadStoredKey() {
   const saved = sessionStorage.getItem('gemini_api_key');
   if (saved) {
     currentApiKey = saved;
-    apiBox.classList.add('hidden');
+    geminiKeyInput.value = saved;
+    geminiKeyInput.disabled = true;
+    saveApiBtn.textContent = '✔️ Chave ativa';
+    saveApiBtn.disabled = true;
     return true;
   }
   return false;
 }
 
-function saveApiKey() {
-  const key = apiKeyInput.value.trim();
+saveApiBtn.addEventListener('click', () => {
+  const key = geminiKeyInput.value.trim();
   if (!key) {
-    alert('Cole uma chave válida.');
+    statusDiv.textContent = '❌ Insira uma chave válida da API Gemini';
     return;
   }
   sessionStorage.setItem('gemini_api_key', key);
   currentApiKey = key;
-  apiBox.classList.add('hidden');
-  checkReady();
-}
-saveKeyBtn.addEventListener('click', saveApiKey);
-apiKeyInput.addEventListener('keypress', (e) => {
-  if (e.key === 'Enter') saveApiKey();
+  geminiKeyInput.disabled = true;
+  saveApiBtn.textContent = '✔️ Salva';
+  saveApiBtn.disabled = true;
+  statusDiv.textContent = '🔑 Chave salva! Agora faça upload do vídeo.';
+  checkReadyToAnalyze();
 });
 
-// ---------- Inicialização ----------
-async function init() {
-  if (!loadApiKey()) {
-    statusDiv.textContent = '🔑 Insira sua chave da API Gemini para continuar.';
-    analyzeBtn.disabled = true;
-    return;
-  }
-  checkReady();
+// ------------------------------------------------------
+// Upload e preview do vídeo
+// ------------------------------------------------------
+fileDropZone.addEventListener('click', () => videoUpload.click());
+videoUpload.addEventListener('change', handleVideoFile);
+fileDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fileDropZone.style.borderColor = '#c084fc'; });
+fileDropZone.addEventListener('dragleave', () => fileDropZone.style.borderColor = '#4b4b6e');
+fileDropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  fileDropZone.style.borderColor = '#4b4b6e';
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('video/')) processVideoFile(file);
+  else statusDiv.textContent = '⚠️ Arraste apenas arquivos de vídeo.';
+});
+
+function handleVideoFile(e) {
+  const file = e.target.files[0];
+  if (file) processVideoFile(file);
 }
 
-function checkReady() {
-  if (!currentApiKey) {
-    statusDiv.textContent = '🔑 Chave não fornecida.';
-    analyzeBtn.disabled = true;
+function processVideoFile(file) {
+  const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
+  if (file.size > maxSize) {
+    statusDiv.textContent = '❌ Vídeo maior que 2GB. Reduza o tamanho.';
     return;
   }
-  if (sourceVideo.src !== VIDEO_URL && !sourceVideo.src.endsWith(VIDEO_URL)) {
-    loadVideo();
+  fileNameSpan.textContent = file.name;
+  uploadedVideoFile = file;
+  
+  const url = URL.createObjectURL(file);
+  previewVideo.src = url;
+  previewContainer.style.display = 'block';
+  previewVideo.load();
+  
+  previewVideo.onloadedmetadata = () => {
+    videoDuration = previewVideo.duration;
+    statusDiv.textContent = `✅ Vídeo carregado (${videoDuration.toFixed(1)} segundos, ${(file.size / (1024*1024)).toFixed(1)} MB). Pronto para enviar à IA.`;
+    checkReadyToAnalyze();
+  };
+}
+
+function checkReadyToAnalyze() {
+  if (currentApiKey && uploadedVideoFile && videoDuration > 0) {
+    analyzeBtn.disabled = false;
+    statusDiv.textContent = '🎯 Clique em "Gerar 10 clipes virais com IA" – o upload pode demorar alguns segundos.';
   } else {
-    analyzeBtn.disabled = false;
-  }
-}
-
-async function loadVideo() {
-  try {
-    sourceVideo.src = VIDEO_URL;
-    await new Promise((resolve, reject) => {
-      sourceVideo.addEventListener('loadedmetadata', resolve, { once: true });
-      sourceVideo.addEventListener('error', () => reject(new Error('Vídeo não encontrado')), { once: true });
-      sourceVideo.load();
-    });
-    statusDiv.textContent = `✅ Vídeo carregado (${sourceVideo.duration.toFixed(1)}s). Pronto para análise.`;
-    analyzeBtn.disabled = false;
-  } catch (e) {
-    statusDiv.textContent = '❌ Vídeo não encontrado. Coloque buck.mp4 na mesma pasta.';
     analyzeBtn.disabled = true;
   }
 }
 
-// ---------- Slider de duração ----------
-durSlider.addEventListener('input', () => {
-  memeDuration = parseInt(durSlider.value);
-  durLabel.textContent = memeDuration;
-});
-
-// ---------- Conversão para base64 ----------
-async function videoUrlToBase64(url) {
-  const res = await fetch(url);
-  const blob = await res.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const b64 = reader.result.split(',')[1];
-      resolve({ base64: b64, mimeType: blob.type });
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
+// ------------------------------------------------------
+// File API Gemini (upload e espera ativa)
+// ------------------------------------------------------
+async function uploadToGeminiFileAPI(file, apiKey) {
+  const url = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`;
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'X-Goog-Upload-Protocol': 'multipart' },
+    body: formData
   });
+  
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Upload falhou: ${response.status} - ${err}`);
+  }
+  
+  const data = await response.json();
+  if (!data.file || !data.file.uri) throw new Error('Resposta da API não contém URI do arquivo');
+  return data.file.uri;
 }
 
-// ---------- Frases absurdas de fallback ----------
-const fallbackAbsurdCaptions = [
-  "Quando a geladeira descongela sozinha e você descobre que era o primo",
-  "O pão que meu avô escondeu atrás da TV em 2003 ainda tá lá",
-  "Eu e o espiritual ballroom pós‑moderno indo ao mercado",
-  "A entidade quântica disse que era só um teste",
-  "Toda vez que chove, o wifi da rua fica emocionado",
-  "Meu CPF deu erro no além",
-  "Até o Google Maps se perdeu aqui dentro",
-  "Quem lacra não lucra, mas quem usa fantasia de cavalo lucra?",
-  "O universo é um Transformer desmontado"
-];
-
-function getRandomAbsurdCaption() {
-  return fallbackAbsurdCaptions[Math.floor(Math.random() * fallbackAbsurdCaptions.length)];
+async function waitForFileActive(fileUri, apiKey, maxAttempts = 40) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileUri}?key=${apiKey}`);
+    const data = await res.json();
+    if (data.state === 'ACTIVE') return true;
+    if (data.state === 'FAILED') throw new Error('Arquivo falhou no processamento');
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  throw new Error('Timeout aguardando o arquivo ficar ativo');
 }
 
-// ---------- Análise com Gemini (prompt ABSURDO) ----------
-analyzeBtn.addEventListener('click', async () => {
-  if (!currentApiKey || !sourceVideo.src) return;
+// ------------------------------------------------------
+// Análise com Gemini (pedindo transcript com timestamps)
+// ------------------------------------------------------
+async function analyzeVideoWithGemini() {
+  if (!currentApiKey || !uploadedVideoFile) throw new Error('Chave ou vídeo faltando');
+  statusDiv.textContent = '📤 Enviando vídeo para a API Gemini (até 2GB)...';
   analyzeBtn.disabled = true;
-  generateBtn.disabled = true;
-  statusDiv.textContent = '🤖 Gerando frase nonsense com IA...';
-
+  
   try {
-    const { base64, mimeType } = await videoUrlToBase64(VIDEO_URL);
+    const fileUri = await uploadToGeminiFileAPI(uploadedVideoFile, currentApiKey);
+    uploadedFileUri = fileUri;
+    statusDiv.textContent = '⏳ Aguardando processamento do vídeo pela Google...';
+    await waitForFileActive(fileUri, currentApiKey);
+    
+    const prompt = `
+Você é um especialista em cortes virais para TikTok/Reels/Shorts.
+Analise este vídeo de podcast e identifique os 10 trechos com MAIOR POTENCIAL de viralização.
 
-    // ✨ NOVO PROMPT – pedindo humor absurdo, frase desconexa mas ligada ao vídeo
-    const absurdPrompt = `
-      Analise este vídeo. Identifique um trecho de aproximadamente ${memeDuration} segundos que tenha algum elemento visual ou sonoro marcante (pode ser uma expressão, movimento, objeto inusitado, etc.).
+REGRAS IMPORTANTES:
+- Cada trecho deve ter entre 12 e 30 segundos de duração.
+- **NÃO** escolha trechos que começam nos primeiros 15 segundos do vídeo.
+- Priorize momentos de virada, emoção intensa, humor inesperado, polêmica ou revelação impactante.
+- Evite trechos monótonos ou sem variação de ritmo.
 
-      Com base nesse trecho, crie uma **frase curta e engraçada**, no estilo "meme nonsense brasileiro", com quebra de expectativa bizarra. A frase deve parecer sem sentido, mas ter alguma relação sutil com o que aparece na cena.
+Para cada um dos 10 trechos, retorne um objeto no seguinte formato:
 
-      Retorne **apenas um JSON** com os campos:
-      - startTime: número (segundos do início do trecho)
-      - endTime: número (segundos do fim do trecho)
-      - caption: string com a frase absurda (máximo 15 palavras, em português)
+{
+  "startTime": 25.5,
+  "endTime": 45.0,
+  "title": "Título curioso e chamativo (máx 8 palavras)",
+  "descriptionWithHashtags": "Frase de impacto #hashtag1 #hashtag2 #hashtag3 #podcast #viral",
+  "transcript": [
+    { "word": "Olá", "start": 25.5, "end": 25.8 },
+    { "word": "pessoal", "start": 25.9, "end": 26.3 }
+  ]
+}
 
-      Exemplo de caption: "Quando o pão de queijo começa a levitar na airfryer"
-      Formato JSON: {"startTime": 5.0, "endTime": 20.0, "caption": "frase aqui"}
-    `;
+INSTRUÇÕES IMPORTANTES:
+- O campo "transcript" deve conter a fala exata do trecho, com timestamps absolutos (dentro do vídeo completo).
+- Cada palavra deve ter seu tempo de início e fim (precisão de décimos de segundo).
+- Se o trecho tem silêncios, apenas inclua as palavras faladas.
+- O texto do transcript deve ser o mais fiel possível ao áudio.
+- A duração total do vídeo é ${videoDuration.toFixed(1)} segundos.
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: absurdPrompt },
-              { inline_data: { mime_type: mimeType, data: base64 } }
-            ]
-          }]
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`API Gemini falhou (${response.status}): ${err}`);
-    }
-
-    const data = await response.json();
-    const resultText = data.candidates[0].content.parts[0].text;
-
-    // Extrair JSON
-    let jsonStr = resultText.match(/```json\s*([\s\S]*?)\s*```/)?.[1];
-    if (!jsonStr) jsonStr = resultText.match(/({[\s\S]*})/)?.[1];
-    if (!jsonStr) throw new Error('Resposta da IA não contém JSON válido.\n' + resultText);
-
-    const clip = JSON.parse(jsonStr.trim());
-
-    // Validação
-    if (typeof clip.startTime !== 'number' ||
-        typeof clip.endTime !== 'number' ||
-        typeof clip.caption !== 'string') {
-      throw new Error('JSON inválido: campos ausentes ou com tipos errados');
-    }
-
-    // Verifica se a frase é muito sem graça (ex: maior que 30 palavras, sem vírgula, etc.)
-    // Se for muito descritiva, substitui por fallback absurdo
-    if (clip.caption.length > 100 || clip.caption.split(' ').length > 20) {
-      console.warn('Frase retornada parece descritiva, usando fallback.');
-      clip.caption = getRandomAbsurdCaption();
-    }
-
-    selectedClip = clip;
-    statusDiv.textContent = `✅ Trecho absurdo: "${selectedClip.caption}" (${selectedClip.startTime.toFixed(1)}s – ${selectedClip.endTime.toFixed(1)}s)`;
-    generateBtn.disabled = false;
-  } catch (err) {
-    console.error('Erro na análise:', err);
-    // Fallback total: usar frase aleatória e recortar um trecho automático
-    statusDiv.textContent = '⚠️ IA falhou, usando frase aleatória.';
-    selectedClip = {
-      startTime: 0,
-      endTime: memeDuration,
-      caption: getRandomAbsurdCaption()
+Retorne APENAS um JSON válido com a chave "clips" contendo um array de 10 objetos.
+`;
+    
+    const generateUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${currentApiKey}`;
+    const requestBody = {
+      contents: [{
+        parts: [
+          { text: prompt },
+          { file_data: { mime_type: uploadedVideoFile.type, file_uri: uploadedFileUri } }
+        ]
+      }]
     };
-    generateBtn.disabled = false;
+    
+    const response = await fetch(generateUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Erro ao gerar conteúdo: ${response.status} - ${errText}`);
+    }
+    
+    const data = await response.json();
+    const rawText = data.candidates[0].content.parts[0].text;
+    
+    // Extrair JSON
+    let jsonMatch = rawText.match(/```json\s*([\s\S]*?)\s*```/);
+    let jsonStr = jsonMatch ? jsonMatch[1] : rawText;
+    if (!jsonStr.trim().startsWith('{')) {
+      const braceMatch = jsonStr.match(/({[\s\S]*})/);
+      if (braceMatch) jsonStr = braceMatch[1];
+    }
+    const parsed = JSON.parse(jsonStr);
+    let clipsArray = parsed.clips || (Array.isArray(parsed) ? parsed : []);
+    if (!clipsArray.length) throw new Error('IA não retornou clipes');
+    
+    viralClips = clipsArray.slice(0, 10).map(clip => ({
+      start: Math.max(0, Math.min(clip.startTime, videoDuration - 5)),
+      end: Math.min(videoDuration, Math.max(clip.startTime + 12, clip.endTime)),
+      title: clip.title || `Momento viral ${Math.floor(clip.startTime)}s`,
+      descriptionWithHashtags: clip.descriptionWithHashtags || "#cortes #podcast #viral",
+      transcript: Array.isArray(clip.transcript) ? clip.transcript : []
+    })).filter(clip => clip.end - clip.start >= 5);
+    
+    // Se faltar clipes, complementa com fallback inteligente
+    if (viralClips.length < 10) {
+      await generateIntelligentFallbackClips();
+    }
+    
+    statusDiv.textContent = `🎉 10 clipes gerados com sucesso! Acesse a aba 2.`;
+    document.querySelector('.tab-btn[data-tab="tab2"]').disabled = false;
+    switchToTab('tab2');
+    renderClipsList();
+    
+  } catch (err) {
+    console.error(err);
+    statusDiv.textContent = `❌ Falha na IA: ${err.message}. Usando fallback inteligente baseado em áudio.`;
+    await generateIntelligentFallbackClips();
+    document.querySelector('.tab-btn[data-tab="tab2"]').disabled = false;
+    switchToTab('tab2');
+    renderClipsList();
   } finally {
     analyzeBtn.disabled = false;
   }
-});
-
-// ---------- Geração do meme (renderização) ----------
-generateBtn.addEventListener('click', () => {
-  if (!selectedClip) return;
-  startMemeGeneration();
-});
-
-function wrapTextCentered(ctx, text, maxWidth) {
-  const words = text.split(' ');
-  const lines = [];
-  let current = '';
-  for (const w of words) {
-    const test = current ? current + ' ' + w : w;
-    if (ctx.measureText(test).width > maxWidth && current) {
-      lines.push(current);
-      current = w;
-    } else {
-      current = test;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
 }
 
-async function startMemeGeneration() {
-  if (isGenerating) return;
-  isGenerating = true;
-  generateBtn.disabled = true;
-  downloadBtn.disabled = true;
-  chunks = [];
+analyzeBtn.addEventListener('click', analyzeVideoWithGemini);
 
-  sourceVideo.currentTime = selectedClip.startTime;
-  await new Promise(r => sourceVideo.addEventListener('seeked', r, { once: true }));
+// ------------------------------------------------------
+// Fallback inteligente (análise de atividade de áudio - RMS)
+// ------------------------------------------------------
+async function generateIntelligentFallbackClips() {
+  statusDiv.textContent = '🔊 Analisando áudio para encontrar os melhores momentos...';
+  try {
+    const activity = await analyzeAudioActivity(uploadedVideoFile, videoDuration);
+    // Remove primeiros 10 segundos
+    const validWindows = [];
+    const step = 1.0;
+    for (let t = 10; t < videoDuration - 12; t += step) {
+      let avgAct = 0;
+      let count = 0;
+      for (let dt = 0; dt < 6; dt++) {
+        let idx = Math.floor(t + dt);
+        if (idx < activity.length) {
+          avgAct += activity[idx];
+          count++;
+        }
+      }
+      avgAct = avgAct / count;
+      validWindows.push({ start: t, activity: avgAct });
+    }
+    validWindows.sort((a,b) => b.activity - a.activity);
+    const selected = [];
+    for (let win of validWindows) {
+      if (selected.length >= 10) break;
+      let overlap = false;
+      for (let s of selected) {
+        if (Math.abs(s.start - win.start) < 8) { overlap = true; break; }
+      }
+      if (!overlap) {
+        let end = Math.min(win.start + 18, videoDuration);
+        selected.push({ start: win.start, end: end });
+      }
+    }
+    if (selected.length < 10) {
+      for (let i = selected.length; i < 10; i++) {
+        let start = 15 + Math.random() * (videoDuration - 30);
+        let end = Math.min(start + 18, videoDuration);
+        selected.push({ start, end });
+      }
+    }
+    
+    viralClips = selected.map((seg, idx) => ({
+      start: seg.start,
+      end: seg.end,
+      title: `🔥 Corte viral #${idx+1}`,
+      descriptionWithHashtags: "#podcastclips #viral #humor #cortes",
+      transcript: []   // sem transcript no fallback
+    }));
+    statusDiv.textContent = '⚠️ IA indisponível, usamos cortes baseados em picos de áudio. Edite os títulos se quiser.';
+  } catch (err) {
+    console.error("Falha na análise de áudio:", err);
+    viralClips = [];
+    for (let i = 0; i < 10; i++) {
+      let start = 15 + Math.random() * (videoDuration - 30);
+      let end = Math.min(start + 18, videoDuration);
+      viralClips.push({
+        start, end,
+        title: `🔥 Corte #${i+1}`,
+        descriptionWithHashtags: "#cortes #ia",
+        transcript: []
+      });
+    }
+    statusDiv.textContent = '⚠️ Usando cortes aleatórios (evitando início). Edite os títulos.';
+  }
+}
 
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const srcNode = audioCtx.createMediaElementSource(sourceVideo);
-  const destNode = audioCtx.createMediaStreamDestination();
-  srcNode.connect(destNode);
-  srcNode.connect(audioCtx.destination);
-
-  const canvasStream = canvas.captureStream(30);
-  const combinedStream = new MediaStream([
-    ...canvasStream.getVideoTracks(),
-    ...destNode.stream.getAudioTracks()
-  ]);
-
-  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
-    ? 'video/webm;codecs=vp8' : 'video/webm';
-  mediaRecorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 4000000 });
-  mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-  mediaRecorder.onstop = () => {
-    const blob = new Blob(chunks, { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    downloadBtn.disabled = false;
-    downloadBtn.onclick = () => {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `meme_absurdo_${Date.now()}.webm`;
-      a.click();
+async function analyzeAudioActivity(videoFile, duration) {
+  return new Promise((resolve, reject) => {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const fileReader = new FileReader();
+    fileReader.onload = async function(evt) {
+      try {
+        const arrayBuffer = evt.target.result;
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        const channelData = audioBuffer.getChannelData(0);
+        const sampleRate = audioBuffer.sampleRate;
+        const samplesPerSecond = sampleRate;
+        const totalSeconds = Math.min(duration, audioBuffer.duration);
+        const rmsPerSecond = [];
+        
+        for (let sec = 0; sec < totalSeconds; sec++) {
+          let startSample = sec * samplesPerSecond;
+          let endSample = Math.min(startSample + samplesPerSecond, channelData.length);
+          let sumSq = 0;
+          for (let i = startSample; i < endSample; i++) {
+            sumSq += channelData[i] * channelData[i];
+          }
+          let rms = Math.sqrt(sumSq / (endSample - startSample));
+          rmsPerSecond.push(rms);
+        }
+        audioContext.close();
+        resolve(rmsPerSecond);
+      } catch(e) { reject(e); }
     };
-    statusDiv.textContent = '✅ Meme absurdo pronto! Clique em Baixar.';
-    isGenerating = false;
-    generateBtn.disabled = false;
-  };
-
-  mediaRecorder.start();
-  sourceVideo.muted = false;
-  await sourceVideo.play();
-
-  const start = performance.now();
-  const clipMs = (selectedClip.endTime - selectedClip.startTime) * 1000;
-
-  function drawLoop(now) {
-    const elapsed = now - start;
-    const progress = Math.min(elapsed / clipMs, 1);
-
-    ctx.drawImage(sourceVideo, 0, 0, canvas.width, canvas.height);
-
-    // Texto centralizado e com quebra
-    ctx.font = 'bold 32px "Segoe UI", system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 3.5;
-    ctx.shadowColor = '#000';
-    ctx.shadowBlur = 12;
-
-    const maxWidth = canvas.width - 60;
-    const lines = wrapTextCentered(ctx, selectedClip.caption, maxWidth);
-    const lineHeight = 44;
-    const totalHeight = lines.length * lineHeight;
-    let y = canvas.height / 2 - totalHeight / 2 + lineHeight / 2;
-
-    lines.forEach(line => {
-      ctx.strokeText(line, canvas.width / 2, y);
-      ctx.fillText(line, canvas.width / 2, y);
-      y += lineHeight;
-    });
-    ctx.shadowBlur = 0;
-
-    if (progress < 1 && sourceVideo.currentTime < selectedClip.endTime) {
-      requestAnimationFrame(drawLoop);
-    } else {
-      sourceVideo.pause();
-      mediaRecorder.stop();
-    }
-  }
-
-  requestAnimationFrame(drawLoop);
-  statusDiv.textContent = '🎬 Renderizando meme nonsense...';
+    fileReader.onerror = reject;
+    fileReader.readAsArrayBuffer(videoFile);
+  });
 }
 
-// ---------- Boot ----------
-init();
+// ------------------------------------------------------
+// Renderização da lista de clipes (editável)
+// ------------------------------------------------------
+function renderClipsList() {
+  const container = document.getElementById('clipsList');
+  if (!container) return;
+  container.innerHTML = '';
+  
+  viralClips.forEach((clip, idx) => {
+    const card = document.createElement('div');
+    card.className = 'clip-card';
+    card.dataset.index = idx;
+    
+    card.innerHTML = `
+      <div class="clip-number">🔊 CLIPE ${idx+1}</div>
+      <input type="text" class="clip-title" value="${escapeHtml(clip.title)}" data-field="title" data-idx="${idx}">
+      <textarea rows="2" class="clip-desc" data-field="desc" data-idx="${idx}">${escapeHtml(clip.descriptionWithHashtags)}</textarea>
+      <div class="time-badge">⏱️ ${clip.start.toFixed(1)}s → ${clip.end.toFixed(1)}s (${(clip.end-clip.start).toFixed(1)}s)</div>
+      <button class="download-clip-btn" data-idx="${idx}">📥 Baixar clipe (MP4)</button>
+    `;
+    
+    container.appendChild(card);
+    
+    const titleInput = card.querySelector('.clip-title');
+    const descTextarea = card.querySelector('.clip-desc');
+    titleInput.addEventListener('change', (e) => { viralClips[idx].title = e.target.value; });
+    descTextarea.addEventListener('change', (e) => { viralClips[idx].descriptionWithHashtags = e.target.value; });
+    
+    const downloadBtn = card.querySelector('.download-clip-btn');
+    downloadBtn.addEventListener('click', () => renderSingleClip(idx));
+  });
+}
+
+function escapeHtml(str) {
+  if(!str) return '';
+  return str.replace(/[&<>]/g, function(m) {
+    if(m === '&') return '&amp;';
+    if(m === '<') return '&lt;';
+    if(m === '>') return '&gt;';
+    return m;
+  });
+}
+
+// ------------------------------------------------------
+// Renderização de um clipe (crop inteligente + legenda dinâmica)
+// ------------------------------------------------------
+async function renderSingleClip(clipIndex) {
+  if (isRendering) {
+    statusDiv.textContent = '⏳ Já existe um clipe sendo gerado, aguarde...';
+    return;
+  }
+  const clip = viralClips[clipIndex];
+  if (!clip || !uploadedVideoFile) {
+    alert('Vídeo não disponível. Faça upload novamente.');
+    return;
+  }
+  
+  const clipDurationSec = clip.end - clip.start;
+  if (clipDurationSec <= 0) {
+    statusDiv.textContent = `❌ Duração inválida para o clipe ${clipIndex+1}`;
+    return;
+  }
+
+  isRendering = true;
+  const btn = document.querySelector(`.download-clip-btn[data-idx="${clipIndex}"]`);
+  const originalText = btn.innerHTML;
+  btn.innerHTML = '<div class="loading-spinner"></div> Renderizando...';
+  btn.disabled = true;
+  statusDiv.textContent = `🎬 Renderizando clipe ${clipIndex+1} com crop inteligente e legendas...`;
+  
+  let videoUrl = null;
+  let audioCtx = null;
+  let srcNode = null;
+  let recorder = null;
+  let animationId = null;
+  let timeoutId = null;
+
+  try {
+    videoUrl = URL.createObjectURL(uploadedVideoFile);
+    sourceVideo.src = videoUrl;
+    await sourceVideo.load();
+    sourceVideo.currentTime = clip.start;
+    await new Promise(resolve => sourceVideo.addEventListener('seeked', resolve, { once: true }));
+    
+    // Configura áudio
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    srcNode = audioCtx.createMediaElementSource(sourceVideo);
+    const destNode = audioCtx.createMediaStreamDestination();
+    srcNode.connect(destNode);
+    srcNode.connect(audioCtx.destination);
+    
+    const canvasStream = renderCanvas.captureStream(RENDER_CONFIG.FPS);
+    const combinedStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...destNode.stream.getAudioTracks()
+    ]);
+    
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' : 'video/webm';
+    recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: RENDER_CONFIG.BITRATE });
+    let chunks = [];
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    
+    const clipPromise = new Promise((resolve) => {
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `clip_${clipIndex+1}_viral.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+    });
+    
+    recorder.start();
+    sourceVideo.muted = false;
+    await sourceVideo.play();
+    await audioCtx.resume();
+    
+    const startTime = performance.now();
+    const clipDurationMs = clipDurationSec * 1000;
+    // Efeito de zoom sutil (1.0 -> 1.05)
+    const startZoom = 1.0;
+    const endZoom = 1.05;
+    
+    // Prepara dados da legenda (transcript)
+    const transcript = clip.transcript || [];
+    const hasTranscript = transcript.length > 0;
+    // Se não tem transcript, usa a descrição como texto fixo
+    const fallbackText = clip.descriptionWithHashtags.split('#')[0].trim() || "🔥 Cortes imperdíveis";
+    
+    function drawFrame(now) {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / clipDurationMs);
+      const relativeTime = clip.start + (elapsed / 1000); // tempo absoluto no vídeo
+      
+      // ---- Crop inteligente (cover + zoom) ----
+      const videoWidth = sourceVideo.videoWidth;
+      const videoHeight = sourceVideo.videoHeight;
+      const canvasWidth = renderCanvas.width;
+      const canvasHeight = renderCanvas.height;
+      
+      const scaleX = canvasWidth / videoWidth;
+      const scaleY = canvasHeight / videoHeight;
+      const scale = Math.max(scaleX, scaleY);
+      let scaledWidth = videoWidth * scale;
+      let scaledHeight = videoHeight * scale;
+      
+      // Aplica zoom progressivo
+      const zoom = startZoom + (endZoom - startZoom) * progress;
+      scaledWidth *= zoom;
+      scaledHeight *= zoom;
+      
+      const offsetX = (canvasWidth - scaledWidth) / 2;
+      const offsetY = (canvasHeight - scaledHeight) / 2;
+      
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      ctx.save();
+      ctx.drawImage(sourceVideo, offsetX, offsetY, scaledWidth, scaledHeight);
+      
+      // ---- Gradiente de escurecimento nas bordas ----
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+      gradient.addColorStop(0, 'rgba(0,0,0,0.2)');
+      gradient.addColorStop(1, 'rgba(0,0,0,0.5)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      
+      // ---- Título no topo (com envelope) ----
+      const titleOpacity = Math.min(1, elapsed / 300);
+      ctx.font = RENDER_CONFIG.TITLE_FONT;
+      ctx.textAlign = 'center';
+      const titleText = clip.title.toUpperCase();
+      const titleWidth = ctx.measureText(titleText).width;
+      const titleBoxWidth = Math.min(titleWidth + 60, canvasWidth - 80);
+      const titleBoxHeight = 90;
+      const titleBoxX = (canvasWidth - titleBoxWidth) / 2;
+      const titleBoxY = 60;
+      
+      ctx.fillStyle = RENDER_CONFIG.COLORS.titleBg;
+      ctx.fillRect(titleBoxX, titleBoxY, titleBoxWidth, titleBoxHeight);
+      ctx.fillStyle = RENDER_CONFIG.COLORS.titleText;
+      ctx.shadowColor = RENDER_CONFIG.COLORS.shadow;
+      ctx.shadowBlur = 10;
+      ctx.fillText(titleText, canvasWidth/2, titleBoxY + 58);
+      ctx.shadowBlur = 0;
+      
+      // ---- Legendas dinâmicas (baseadas no transcript ou fallback) ----
+      if (hasTranscript) {
+        // Encontra a palavra ativa no momento
+        let activeWordObj = null;
+        for (let i = 0; i < transcript.length; i++) {
+          const w = transcript[i];
+          if (relativeTime >= w.start && relativeTime <= w.end) {
+            activeWordObj = w;
+            break;
+          }
+        }
+        
+        // Constrói o texto antes da palavra ativa
+        let beforeText = '';
+        let currentWordIndex = -1;
+        for (let i = 0; i < transcript.length; i++) {
+          if (transcript[i] === activeWordObj) {
+            currentWordIndex = i;
+            break;
+          }
+          beforeText += transcript[i].word + ' ';
+        }
+        const activeWord = activeWordObj ? activeWordObj.word : '';
+        
+        // Se não encontrou palavra ativa, mostra o texto completo
+        let fullText = beforeText + activeWord;
+        if (!activeWordObj) {
+          fullText = transcript.map(w => w.word).join(' ');
+        }
+        
+        const legendY = canvasHeight - 200;
+        ctx.font = RENDER_CONFIG.SUBTITLE_FONT;
+        
+        if (activeWordObj && activeWord) {
+          // Medir largura do texto antes
+          const beforeWidth = ctx.measureText(beforeText).width;
+          // Desenha o texto normal (antes da palavra ativa)
+          ctx.fillStyle = RENDER_CONFIG.COLORS.subtitleNormal;
+          ctx.shadowBlur = 6;
+          ctx.fillText(beforeText, canvasWidth/2 - beforeWidth/2, legendY);
+          
+          // Desenha a palavra ativa com efeito de pulso
+          const pulse = 1 + Math.sin(now * 0.02) * 0.06;
+          ctx.save();
+          ctx.translate(canvasWidth/2 + beforeWidth/2, legendY);
+          ctx.scale(pulse, pulse);
+          ctx.fillStyle = RENDER_CONFIG.COLORS.subtitleActive;
+          ctx.shadowBlur = 15;
+          ctx.fillText(activeWord, 0, 0);
+          ctx.restore();
+        } else {
+          // Sem palavra ativa: mostra todo o texto estático
+          ctx.fillStyle = RENDER_CONFIG.COLORS.subtitleNormal;
+          ctx.shadowBlur = 6;
+          ctx.fillText(fullText, canvasWidth/2, legendY);
+        }
+      } else {
+        // Fallback: mostra a descrição como legenda estática (sem animação)
+        const legendText = fallbackText;
+        ctx.font = RENDER_CONFIG.SUBTITLE_FONT;
+        ctx.fillStyle = RENDER_CONFIG.COLORS.subtitleNormal;
+        ctx.shadowBlur = 6;
+        const legendY = canvasHeight - 200;
+        ctx.fillText(legendText, canvasWidth/2, legendY);
+      }
+      
+      ctx.restore();
+      
+      // Continua ou finaliza
+      if (progress < 1) {
+        animationId = requestAnimationFrame(drawFrame);
+      } else {
+        if (animationId) cancelAnimationFrame(animationId);
+        sourceVideo.pause();
+        if (recorder && recorder.state === 'recording') recorder.stop();
+      }
+    }
+    
+    timeoutId = setTimeout(() => {
+      if (recorder && recorder.state === 'recording') {
+        console.warn('Timeout de segurança: parando recorder');
+        sourceVideo.pause();
+        recorder.stop();
+      }
+    }, clipDurationMs + 500);
+    
+    animationId = requestAnimationFrame(drawFrame);
+    await clipPromise;
+    
+    statusDiv.textContent = `✅ Clipe ${clipIndex+1} baixado!`;
+  } catch (err) {
+    console.error(err);
+    statusDiv.textContent = `❌ Erro ao renderizar clipe: ${err.message}`;
+    if (recorder && recorder.state === 'recording') recorder.stop();
+  } finally {
+    isRendering = false;
+    btn.innerHTML = originalText;
+    btn.disabled = false;
+    if (timeoutId) clearTimeout(timeoutId);
+    if (animationId) cancelAnimationFrame(animationId);
+    sourceVideo.pause();
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    if (audioCtx) audioCtx.close();
+  }
+}
+
+// ------------------------------------------------------
+// Utilitários de tabs
+// ------------------------------------------------------
+function switchToTab(tabId) {
+  tabContents.forEach(tab => tab.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  tabBtns.forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.getAttribute('data-tab') === tabId) btn.classList.add('active');
+  });
+}
+
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tabId = btn.getAttribute('data-tab');
+    if (!btn.disabled) switchToTab(tabId);
+  });
+});
+
+// ------------------------------------------------------
+// Inicialização
+// ------------------------------------------------------
+loadStoredKey();
+if (!currentApiKey) statusDiv.textContent = '🔐 Insira sua chave Gemini e depois faça upload do vídeo.';
